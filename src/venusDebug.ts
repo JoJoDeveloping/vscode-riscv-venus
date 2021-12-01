@@ -12,7 +12,7 @@ import {
 import { DebugProtocol } from 'vscode-debugprotocol';
 import path, { basename } from 'path';
 import { VenusBreakpoint, VenusRuntime, VenusSettings } from './venusRuntime';
-import { workspace, languages, Disposable, window, ViewColumn, TextEditor, commands, Uri, TextDocument } from 'vscode';
+import { workspace, languages, Disposable, window, ViewColumn, TextEditor, commands, Uri, debug, TextDocument } from 'vscode';
 import { AssemblyView, riscvDisassemblyProvider } from './assemblyView';
 import { DisassemblyDecoratorProvider } from './assemblyDecorator';
 import * as helpers from './venusHelpers';
@@ -232,11 +232,12 @@ export class VenusDebugSession extends LoggingDebugSession {
 
 		venusTerminal.appendText('\n');
 		venusTerminal.appendText(`-------------------------------------------------------------------------------------------\n`);
-		venusTerminal.appendText(`Starting program ${args.program}\n`);
+		venusTerminal.appendText(`Starting program ${args.program} with trace ${args.trace} and onEntry ${args.stopOnEntry} \n`);
 		venusTerminal.appendText('\n');
 
 		// make sure to 'Stop' the buffered logging if 'trace' is not set
 		logger.setup(args.trace ? Logger.LogLevel.Verbose : Logger.LogLevel.Stop, false);
+	
 
 		// Sometimes the Venus Options Menu is not shown.(Vscode Bug?) This makes sure it is shown at least when we start debug
 		commands.executeCommand('setContext', 'venus:showOptionsMenu', true);
@@ -262,10 +263,17 @@ export class VenusDebugSession extends LoggingDebugSession {
 		});
 
 		// start the program in the runtime
-		this._runtime.start(args.stopOnEntry ? args.stopOnEntry : false);
+		let stopOnEntry = args.stopOnEntry ? args.stopOnEntry : false;
+		this._runtime.start(stopOnEntry);
 
 		response.success = true;
 		this.sendResponse(response);
+
+		this.updateAssemblyViewDecorator();
+		if (!stopOnEntry) {
+			this.updateAssemblyViewDecorator();
+			this.sendEvent(new ContinuedEvent(VenusDebugSession.THREAD_ID, true)); //fixes startOnEntry start being broken
+		}
 
 
 	}
@@ -761,20 +769,13 @@ export class VenusDebugSession extends LoggingDebugSession {
 			result = VenusRobotUI.getInstance().ecall(jsonObj.id, jsonObj.params);
 		} else if ((jsonObj.id >= 0x120) && (jsonObj.id < 0x123)) {
 			result = VenusSevenSegBoardUI.getInstance().ecall(jsonObj.id, jsonObj.params);
-		} else if (jsonObj.id === 0x130) {
-			venusTerminal.activateInput();
-			venusTerminal.show();
-		} else if (jsonObj.id === 0x131) {
+		} else if (jsonObj.id == 0x131) {
 			let char = venusTerminal.consumeInputBuffer();
-			if (char === null) {
-				if (venusTerminal.waitingForInput()) {
-					result = {"a0": 0x00000001};
-				} else {
-					result = {"a0": 0x00000000};
-				}
+			if (char == null) {
+				result = {"a0": 0x00000000};
 			} else {
 				let charCode = char.charCodeAt(0) & 0x0FFFFFFF;
-				result = {"a0": 0x00000002,
+				result = {"a0": 0x00000001,
 						"a1": charCode | 0x00000000,};
 			}
 		}

@@ -14,13 +14,16 @@ export class venusTerminal {
 	private static charRegex = RegExp("^[a-zA-Z0-9]+$");
 
 	/** This buffers the last input that we sent. Input is sent with enter. */
-	private static inputBuffer: string | null = null;
+	private static inputBuffer: string = "";
 	/** If input is currently activated for this console */
-	private static inputActivated: boolean = false;
+	private static inputActivated: boolean = true;
 	/** This is what is currently input into the console. */
 	private static currentline = '';
 	/** This bool specifies if the current message comes from the user typing directly into the console or from sending text through a function */
 	private static isSystemMessage: boolean = false;
+
+	private static lastOutput: number = 0;
+
 	private static readonly pty: vscode.Pseudoterminal = {
 		onDidWrite: venusTerminal.writeEmitter.event,
 		onDidClose: venusTerminal.closeEmitter.event,
@@ -38,36 +41,43 @@ export class venusTerminal {
 		handleInput: async (data: string) => {
 			if (venusTerminal.isOpen && (venusTerminal.inputActivated || venusTerminal.isSystemMessage)) {
 				// First we process all newlines and split the data
-				var processedData = data.replace("\r\n", "\n").replace("\n\r", "\n").replace("\r", "\n").replace("\n", "\r\n"); // normalize newlines to \r\n
+				var processedData = data.replace("\r\n", "\n").replace("\n\r", "\n").replace("\r", "\n").replace("\n", "\r\n"); // normalize newlines to \n
 				let stringLines = processedData.split("(/(?<=\r\n)/)") // splits string and keeps the delimiter. Taken from https://pineco.de/snippets/split-strings-and-keep-the-delimiter/
 				stringLines = stringLines.filter(function (el) {
 					return el != null; // filter all emtpy arrays created by splitting the string
 				});
 				for (let line of stringLines) {
+					// console.log("Got " + (venusTerminal.isSystemMessage ? "system" : "input") + " line: " + line.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\"", "\\\"") + "|||(eol)!");
+					// console.log("Cur line: " + venusTerminal.currentline.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\"", "\\\"") + " || last system: " + venusTerminal.lastOutput);
+					// console.log("Posiion: " + venusTerminal.cursorPos + " inputBuffer: " + venusTerminal.inputBuffer.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\"", "\\\""));
 					if (venusTerminal.isSystemMessage) {
 						if (line.endsWith('\r\n')) {
 							venusTerminal.writeEmitter.fire(line);
 							venusTerminal.currentline = '';
 							venusTerminal.cursorPos = 0;
+							venusTerminal.lastOutput = 0;
 						} else {
 							venusTerminal.writeEmitter.fire(line)
 							venusTerminal.currentline += line;
 							venusTerminal.cursorPos += line.length;
+							venusTerminal.lastOutput = venusTerminal.cursorPos;
 						}
 						return;
 					}
-					if (line.endsWith('\r\n')) { // Enter
+					if (line === "\r\n") { // Enter
 						venusTerminal.writeEmitter.fire(line);
-						if (venusTerminal.inputActivated) {
-							venusTerminal.inputBuffer = venusTerminal.currentline;
-							venusTerminal.deactivateInput();
-						}
+						venusTerminal.inputBuffer += venusTerminal.currentline.substring(venusTerminal.lastOutput) + "\n";
 						venusTerminal.currentline = '';
 						venusTerminal.cursorPos = 0;
+						venusTerminal.lastOutput = 0;
 						return;
 					}
 					if (line === '\x7f') { // Backspace
 						if (venusTerminal.currentline.length === 0) {
+							return;
+						}
+						//do not delete input characters
+						if (venusTerminal.cursorPos <= venusTerminal.lastOutput) {
 							return;
 						}
 						venusTerminal.currentline = venusTerminal.removeByIndex(venusTerminal.currentline, venusTerminal.cursorPos - 1)
@@ -80,6 +90,10 @@ export class venusTerminal {
 						return;
 					}
 					if (line === '\x1b[D') { // Left
+						//do not move behind input characters
+						if (venusTerminal.cursorPos <= venusTerminal.lastOutput) {
+							return;
+						}
 						if (venusTerminal.currentline.length !== 0 && venusTerminal.cursorPos > 0) {
 							venusTerminal.writeEmitter.fire('\x1b[D');
 							venusTerminal.cursorPos -= 1;
@@ -94,6 +108,9 @@ export class venusTerminal {
 						return;
 					}
 					if (line === '\x1b[3~') { // Delete
+						if (venusTerminal.inputActivated && venusTerminal.cursorPos < venusTerminal.lastOutput) {
+							return;
+						}
 						if (venusTerminal.currentline.length !== 0 && venusTerminal.cursorPos < venusTerminal.currentline.length) {
 							venusTerminal.currentline = venusTerminal.removeByIndex(venusTerminal.currentline, venusTerminal.cursorPos);
 							venusTerminal.writeEmitter.fire('\x1b[P');
@@ -104,7 +121,7 @@ export class venusTerminal {
 						venusTerminal.writeEmitter.fire('\u0003' + '\r\n');
 						venusTerminal.currentline = "";
 						venusTerminal.cursorPos = 0;
-						venusTerminal.deactivateInput();
+						venusTerminal.lastOutput = 0;
 						return;
 					}
 					if (line.length == 1 && line != '\t') { // Tabs mess with other things currently so we dont support them
@@ -160,7 +177,6 @@ export class venusTerminal {
 	public static create() {
 		if (venusTerminal.terminal == null) {
 			venusTerminal.terminal = vscode.window.createTerminal({ name: `Venus Terminal`, pty: venusTerminal.pty });
-			venusTerminal.deactivateInput()
 		}
 	}
 
@@ -173,44 +189,20 @@ export class venusTerminal {
 
 	/** This adds a string to the console. A new line is added at the end of input. */
 	public static appendLine(text: string,) {
-		if (text.length > 0) {
-			let formerState = venusTerminal.inputActivated
-			venusTerminal.inputActivated = false
-			venusTerminal.isSystemMessage = true
-			//venusTerminal.resetInputBuffer()
-			venusTerminal.currentline = '';
-			venusTerminal.cursorPos = 0;
-			venusTerminal.pty.handleInput!(text + '\r')
-			venusTerminal.isSystemMessage = false
-			venusTerminal.inputActivated = formerState
-			venusTerminal.show()
-		}
+		// console.log("Appending line " + venusTerminal.currentline.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\"", "\\\""))
+		venusTerminal.appendText(text + "\n");
 	}
 
 	/** This adds a string to the console. No new line is added at the end of input. */
 	public static appendText(text: string,) {
 		if (text.length > 0) {
-			let formerState = venusTerminal.inputActivated
 			venusTerminal.inputActivated = false
 			venusTerminal.isSystemMessage = true
 			venusTerminal.pty.handleInput!(text)
 			venusTerminal.isSystemMessage = false
-			venusTerminal.inputActivated = formerState
+			venusTerminal.inputActivated = true
 			venusTerminal.show()
 		}
-	}
-
-	public static activateInput() {
-		venusTerminal.inputBuffer = null
-		venusTerminal.inputActivated = true
-	}
-
-	public static deactivateInput() {
-		venusTerminal.inputActivated = false
-	}
-
-	public static waitingForInput(): boolean {
-		return venusTerminal.inputActivated
 	}
 
 	public static getInputBuffer() {
@@ -221,17 +213,12 @@ export class venusTerminal {
 	 *  If the input is fully consumed returns null.
 	 */
 	public static consumeInputBuffer() : string | null {
-		if (venusTerminal.inputBuffer == null || venusTerminal.inputBuffer?.length == 0) {
-			venusTerminal.inputBuffer = null
+		if (venusTerminal.inputBuffer?.length == 0) {
 			return null
 		} else {
 			let char = venusTerminal.inputBuffer.charAt(0)
 			venusTerminal.inputBuffer = venusTerminal.inputBuffer.substring(1)
 			return char
 		}
-	}
-
-	public static resetInputBuffer() {
-		return venusTerminal.inputBuffer = null
 	}
 }

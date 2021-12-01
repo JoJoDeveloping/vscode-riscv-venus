@@ -103,6 +103,7 @@ export class VenusRuntime extends EventEmitter {
 	 * Start executing the given program.
 	 */
 	public start(stopOnEntry: boolean) {
+		simulator.driver.timer = null;
 		if (stopOnEntry) {
 			this.updateStack();
 			this.sendEvent('stopOnEntry');
