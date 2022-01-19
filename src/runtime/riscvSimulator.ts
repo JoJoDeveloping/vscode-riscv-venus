@@ -52,6 +52,7 @@ const venus = require("./venus/build/kotlin-js-min/main/venus")
 
 const venus_main = venus;
 const driver = venus_main.venus.Driver;
+driver.driver_init(true, venus_main.venus.VSCodeRenderer);
 venus.api = venus_main.venus.api.API;
 const simulatorAPI = venus_main.venus.api.venusbackend.simulator.Simulator;
 

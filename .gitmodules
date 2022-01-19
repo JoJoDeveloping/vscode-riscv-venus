@@ -1,4 +1,4 @@
 [submodule "src/runtime/venus"]
 	path = src/runtime/venus
-	url = https://github.com/hm-riscv/venus.git
+	url = git@github.com:JoJoDeveloping/venus.git
 	branch = js
